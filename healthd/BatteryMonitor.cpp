@@ -26,6 +26,7 @@
 #include <glob.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -68,6 +69,21 @@ using aidl::android::hardware::health::BatteryStatus;
 using aidl::android::hardware::health::HealthInfo;
 
 namespace {
+
+static bool isOplusMilliampDevice() {
+    char device[PROPERTY_VALUE_MAX] = {};
+    property_get("ro.product.device", device, "");
+    return !strcasecmp(device, "OP60FFL1") || !strcasecmp(device, "OP611FL1") ||
+           !strcasecmp(device, "infiniti") || !strcasecmp(device, "lighthouse");
+}
+
+static int normalizeCurrentMicroamps(int current) {
+    // Some OPlus power_supply nodes report current in mA while AOSP expects uA.
+    if (isOplusMilliampDevice() && current > 0 && current < 10000) {
+        return current * 1000;
+    }
+    return current;
+}
 
 // Translate from AIDL back to HIDL definition for getHealthInfo_*_* calls.
 // Skips storageInfo and diskStats.
@@ -471,8 +487,8 @@ void BatteryMonitor::updateValues(void) {
     mHealthInfo->batteryVoltageMillivolts =
             tryGetIntField(mHealthdConfig->batteryVoltagePath).value_or(0) / 1000;
 
-    mHealthInfo->batteryCurrentMicroamps =
-            tryGetIntField(mHealthdConfig->batteryCurrentNowPath).value_or(0);
+    mHealthInfo->batteryCurrentMicroamps = normalizeCurrentMicroamps(
+            tryGetIntField(mHealthdConfig->batteryCurrentNowPath).value_or(0));
 
     mHealthInfo->batteryFullChargeUah = getFullChargeUah();
 
@@ -613,6 +629,12 @@ void BatteryMonitor::updateValues(void) {
             path.appendFormat("%s/%s/voltage_max", POWER_SUPPLY_SYSFS_PATH, chargerName.c_str());
             if (auto vmax = tryGetIntField(path); vmax.ok() || vmax.error().code() != ENOENT) {
                 ChargingVoltage = vmax.value_or(0);
+            }
+            // Prefer battery current_now / voltage_now
+            if (access(SYSFS_BATTERY_CURRENT, R_OK) == 0) {
+                ChargingCurrent = normalizeCurrentMicroamps(
+                        abs(tryGetIntField(String8(SYSFS_BATTERY_CURRENT)).value_or(0)));
+            }
             } else {
                 path.clear();
                 path.appendFormat("%s/%s/voltage_max_design", POWER_SUPPLY_SYSFS_PATH,
