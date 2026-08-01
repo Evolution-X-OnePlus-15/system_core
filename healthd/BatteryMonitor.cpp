@@ -48,6 +48,7 @@
 
 #define POWER_SUPPLY_SUBSYSTEM "power_supply"
 #define POWER_SUPPLY_SYSFS_PATH "/sys/class/" POWER_SUPPLY_SUBSYSTEM
+#define SYSFS_BATTERY_CURRENT POWER_SUPPLY_SYSFS_PATH "/battery/current_now"
 #define FAKE_BATTERY_CAPACITY 42
 #define FAKE_BATTERY_TEMPERATURE 424
 #define MILLION 1.0e6
@@ -151,11 +152,11 @@ static std::optional<T> mapSysfsString(const char* str, SysfsStringEnumMap<T> ma
 
 static void initHealthInfo(HealthInfo* health_info) {
     *health_info = {
+            .batteryStatus = BatteryStatus::UNKNOWN,
+            .batteryHealth = BatteryHealth::UNKNOWN,
             .batteryCapacityLevel = BatteryCapacityLevel::UNSUPPORTED,
             .batteryChargeTimeToFullNowSeconds =
                     (int64_t)HealthInfo::BATTERY_CHARGE_TIME_TO_FULL_NOW_SECONDS_UNSUPPORTED,
-            .batteryStatus = BatteryStatus::UNKNOWN,
-            .batteryHealth = BatteryHealth::UNKNOWN,
             .batteryHealthData = std::nullopt,
     };
 }
@@ -578,19 +579,23 @@ void BatteryMonitor::updateValues(void) {
                               mChargerNames[i].c_str());
             int ChargingCurrent = (access(path.c_str(), R_OK) == 0) ? getIntField(path) : 0;
 
-            int ChargingCurrent = 0;
-            int ChargingVoltage = 0;
+            path.clear();
+            path.appendFormat("%s/%s/voltage_max", POWER_SUPPLY_SYSFS_PATH,
+                              mChargerNames[i].c_str());
+            int ChargingVoltage = (access(path.c_str(), R_OK) == 0) ? getIntField(path) : 0;
 
-            // Prefer battery current_now / voltage_now
+            // Prefer battery current_now
             if (access(SYSFS_BATTERY_CURRENT, R_OK) == 0) {
                 ChargingCurrent = normalizeCurrentMicroamps(
                         abs(getIntField(String8(SYSFS_BATTERY_CURRENT))));
-            } else {
+            }
+
+            if (ChargingVoltage == 0) {
                 path.clear();
                 path.appendFormat("%s/%s/voltage_max_design", POWER_SUPPLY_SYSFS_PATH,
                                   mChargerNames[i].c_str());
                 if (access(path.c_str(), R_OK) == 0) {
-                    ChargingCurrent = normalizeCurrentMicroamps(abs(getIntField(path)));
+                    ChargingVoltage = getIntField(path);
                 }
             }
 
